@@ -1,0 +1,48 @@
+﻿using AppointmentSchedulingApp.SharedKernel;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Newtonsoft.Json;
+
+namespace AppointmentSchedulingApp.Infrastructure.Outbox;
+
+internal sealed class InsertOutboxMessagesInterceptor : SaveChangesInterceptor
+{
+    private static readonly JsonSerializerSettings SerializerSettings = new()
+    {
+        TypeNameHandling = TypeNameHandling.All
+    };
+
+    public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+        DbContextEventData eventData,
+        InterceptionResult<int> result,
+        CancellationToken cancellationToken = default)
+    {
+        if (eventData.Context is not null)
+        {
+            InsertOutboxMessages(eventData.Context);
+        }
+
+        return base.SavingChangesAsync(eventData, result, cancellationToken);
+    }
+
+    private static void InsertOutboxMessages(DbContext context)
+    {
+        DateTime utcNow = DateTime.UtcNow;
+
+        var outboxMessages = context
+            .ChangeTracker
+            .Entries<Entity>()
+
+            .Select(entry => entry.Entity)
+            .SelectMany(entity => entity.DomainEvents)
+            .Select(domainEvent => new OutboxMessage
+            {
+                EventType = domainEvent.GetType().Name,
+                Payload = JsonConvert.SerializeObject(domainEvent, SerializerSettings)
+            })
+            .ToList();
+
+        context.Set<OutboxMessage>().AddRange(outboxMessages);
+    }
+
+}
